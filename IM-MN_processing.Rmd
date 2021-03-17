@@ -1,0 +1,97 @@
+---
+title: "PseudoMGF_Generator"
+---
+
+The purpose of this notebook is to generate a pseudo-mgf file for molecules fragmented in IM-MS.
+Instead of the m/z - intensity pairs contained in a normal mgf this workflow creates a file containing DT/CCS - intensity pairs for the fragments.
+
+This notebook will also generate:
+- a classical mgf file containing m/z - intensity pairs
+- a cluster index csv file used to link the samples to their names in the MN
+- an interactive calibration plot in html format, to better evaluate the CCS calibration results
+
+To run this notebook you will need:
+- a *.csv file obtained from MZmine processing (see batch file), containing the values for all mobility peaks (mz, rt, intensity, charge)
+- a *.csv file containing the metadata with the headers "file_name", "AT_correction", "mass", "charge" 
+- a *.csv file containing the CCS calibration points ("mz", "z", "MW", "CCSN2", "TA"). Correction from tA to td is automatic, do not correct the values before importing them. The reference CCS values must be in Å² → returns nm² [OPTIONAL FILE]
+
+Use "CTRL+ALT+R" to run the file.
+
+#######################################################################################
+###                                                                                 ###
+###  DO NOT TOUCH ANYTHING BELOW, POP-UPS WILL APPEAR FOR ADDITIONNAL INFORMATION!! ###
+###                                                                                 ###
+#######################################################################################
+------------------------------------------------------------------------------------------
+First we load the required packages and functions
+```{r, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(svDialogs)
+source("./IM-MN_functions_ATD.R")
+```
+
+The actual processing
+```{r, message=FALSE, warning=FALSE}
+
+############################# MANDATORY DATA IMPORT #################################################
+
+# Find and read the data *.csv in the directory
+files=dlg_open(title = "Select the CSV containing the DATA")
+csv=read_csv(files$res)
+rm(files)
+
+# Find and read the metadata *.csv in the directory
+metadata_rq=dlg_open(title = "Select the CSV containing the METADATA")
+metadata=read_csv(metadata_rq$res)
+rm(metadata_rq)
+
+############################# MANDATORY USER INPUT ##################################################
+
+# Ask for the name of the output file
+user_request="Enter the file name for the final MGF"
+file_name = dlgInput(user_request, Sys.info()["user"])$res
+
+# Ask for the output directory
+dir_request=dlg_dir(title = "Select the output directory")
+path_out=paste(dir_request$res,"/",sep="")
+
+############################# DRIFT TIME PROCESSING #################################################
+
+# Convert the MZmine 2 output to a list, it will be easier to work with
+data_as_list=MZmine_split_list(csv)
+
+# Now we correct the arrival time to drift time
+data_as_list=correct_AT_2_DT(data_as_list, metadata)
+
+############################# CCS PROCESSING ########################################################
+############################# OPTIONAL DATA IMPORT ##################################################
+
+CCS_calib = dlg_message("Do you want to apply a CCS calibration?", type = "yesno")
+
+if(CCS_calib$res=="yes"){
+  # Find and read the CCS calibration *.csv in the directory
+  ccs_rq=dlg_open(title = "Select the CCS calibration CSV input file")
+  calib=read_csv(ccs_rq$res)
+  rm(ccs_rq)
+  
+  # We apply a log CCS calibration (NB default gas = N2, ADC delay = 1.5ms, cation = Li+)
+  calibrated=CCS_calibration(data_as_list, calib)
+  data_as_list=calibrated[[1]]   
+  
+  plot=calibrated[[2]] %>% as_widget()
+  htmlwidgets::saveWidget(plot, paste(path_out, file_name, '_calibration.html', sep=""))
+}
+
+############################# PROCESSED DATA EXPORT #################################################
+
+# Generates the *.mgf (pseudo MGF with IMS data)
+write_mgf_IM(data_as_list, metadata, file_name = file_name, path_out = path_out)
+
+# Generates the *.mgf (real MGF with MS data)
+write_mgf_MZ(data_as_list, metadata, file_name = file_name, path_out = path_out)
+
+# Generate a *.csv with the sample names and the cluster index
+write_csv_clusterindex(data_as_list, file_name = file_name, path_out = path_out)
+
+```
+
